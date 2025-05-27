@@ -153,7 +153,6 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 session_id=session_id, 
                 metadata=task_metadata
             ):
-                logger.info(f"Event: {event}")
                 if event.get("event") == "on_tool_end":
                     tool_name_event = event.get("name", "unnamed_tool")
                     tool_input_event = event.get("data", {}).get("input", "")
@@ -172,7 +171,6 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                     elif output_chunk:
                         final_ai_message = output_chunk
                         logger.info(f"Captured final AIMessage (from output) for task {task_id}")
-            logger.info(f"Final AIMessage: {final_ai_message}")
 
             if final_ai_message:
                 parsed_output = await self.core_agent.parse_agent_final_output(final_ai_message)
