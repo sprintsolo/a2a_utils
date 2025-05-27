@@ -5,8 +5,12 @@ from typing import Any, Dict, List, Optional, AsyncIterable
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 # LangGraph specific imports, assuming create_react_agent and MemorySaver are standard
-from langgraph.prebuilt import create_react_agent 
+from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
+
+# LLM imports
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .tool_usage_tracking_mixin import ToolUsageTrackingMixin
 
@@ -22,15 +26,56 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
     """
 
     SUPPORTED_CONTENT_TYPES = ["text", "text/plain"] # Can be overridden by subclasses
+    DEFAULT_LLM_PROVIDER = "google"
+    DEFAULT_OPENAI_MODEL = "gpt-4.1-mini" # OpenAI 기본 모델
+    DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash-preview-04-17" # Google 기본 모델
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        llm_provider: str = DEFAULT_LLM_PROVIDER,
+        openai_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        *args,
+        **kwargs
+    ):
         """
         Initializes the BaseLangGraphCoreAgent.
-        Subclasses are responsible for initializing self.model, and potentially self.tools and self.graph
-        if they are not dynamically created per execution.
+        Sets up the language model based on the provider.
         """
         super().__init__(*args, **kwargs)  # Initialize ToolUsageTrackingMixin
-        self.model: Optional[Any] = None # e.g., ChatOpenAI instance, to be set by subclass
+        
+        self.llm_provider = llm_provider.lower()
+        self.openai_api_key = openai_api_key
+        self.google_api_key = google_api_key
+        self.model: Optional[Any] = None # Will be set below
+        
+        _model_name = model_name
+
+        if self.llm_provider == "openai":
+            if not self.openai_api_key:
+                raise ValueError("openai_api_key must be provided if llm_provider is 'openai'.")
+            if _model_name is None:
+                _model_name = self.DEFAULT_OPENAI_MODEL
+            self.model = ChatOpenAI(model_name=_model_name, openai_api_key=self.openai_api_key, streaming=True)
+            logger.info(f"Initialized BaseLangGraphCoreAgent with OpenAI model: {_model_name}")
+        elif self.llm_provider == "google":
+            if not self.google_api_key:
+                raise ValueError("google_api_key must be provided if llm_provider is 'google'.")
+            if _model_name is None:
+                _model_name = self.DEFAULT_GOOGLE_MODEL
+            self.model = ChatGoogleGenerativeAI(
+                model=_model_name,
+                google_api_key=self.google_api_key,
+                # streaming=True, # streaming 대신 disable_streaming 사용 권장
+                disable_streaming=False, 
+                convert_system_message_to_human=False,
+                temperature=0.1, # 기본 온도 설정
+            )
+            logger.info(f"Initialized BaseLangGraphCoreAgent with Google model: {_model_name}")
+        else:
+            raise ValueError(f"Unsupported llm_provider: {self.llm_provider}. Choose 'openai' or 'google'.")
+
         self.tools: List[Any] = []
         self.graph: Optional[Any] = None
         self.memory = MemorySaver() # Default memory, can be configured

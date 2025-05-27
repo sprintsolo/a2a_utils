@@ -8,6 +8,7 @@ setup(
         'a2a-sdk',
         'langchain-core',
         'langchain-openai',
+        'langchain-google-genai',
         'langgraph',
         'composio-langchain',
         'composio-core',

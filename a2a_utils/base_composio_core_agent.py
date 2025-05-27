@@ -1,7 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from langchain_openai import ChatOpenAI # Assuming this is a common choice
 from composio_langchain import ComposioToolSet
 from langchain_core.messages import AIMessage
 
@@ -19,30 +18,36 @@ class BaseComposioCoreAgent(BaseLangGraphCoreAgent):
 
     def __init__(
         self,
-        openai_api_key: str, # Expects an OpenAI API key for ChatOpenAI
-        composio_api_key: Optional[str] = None, # Optional: if not set, uses environment variable
-        model_name: str = "gpt-4-turbo-preview",
-        apps: Optional[List[str]] = None, # List of Composio apps to enable
-        *args, 
+        openai_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
+        composio_api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        apps: Optional[List[str]] = None,
+        llm_provider: str = BaseLangGraphCoreAgent.DEFAULT_LLM_PROVIDER,
+        *args,
         **kwargs
     ):
         """
         Initializes the BaseComposioCoreAgent.
 
         Args:
-            openai_api_key: API key for the language model (e.g., OpenAI).
+            openai_api_key: API key for OpenAI. Passed to superclass.
+            google_api_key: API key for Google. Passed to superclass.
             composio_api_key: Composio API key. If None, it attempts to use an environment variable.
-            model_name: Name of the language model to use (default: "gpt-4-turbo-preview").
+            model_name: Name of the language model to use. Passed to superclass.
             apps: Optional list of Composio app IDs to enable.
                   If None or empty, default Composio behavior (all connected apps) is used.
+            llm_provider: The LLM provider to use ("openai" or "google"). Passed to superclass.
         """
-        super().__init__(*args, **kwargs)
-        
-        if not openai_api_key:
-            raise ValueError("openai_api_key must be provided for the language model.")
-        self.model = ChatOpenAI(model_name=model_name, openai_api_key=openai_api_key, streaming=True)
-        self.openai_api_key = openai_api_key
-        
+        super().__init__(
+            llm_provider=llm_provider,
+            openai_api_key=openai_api_key,
+            google_api_key=google_api_key,
+            model_name=model_name,
+            *args,
+            **kwargs
+        )
+
         self.composio_toolset: Optional[ComposioToolSet] = None
         self.apps_to_enable = apps if apps else [] # Store for potential re-initialization or logging
         self.composio_api_key = composio_api_key # Store for potential re-initialization
