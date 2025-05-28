@@ -165,7 +165,6 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 # Check for pre-processed final AIMessage from the core agent
                 if isinstance(event.get("data"), dict):
                     processed_message = event.get("data", {}).get("final_agent_message")
-                    logger.info(f"processed_message: {processed_message}")
                     logger.info(f"isinstance(processed_message, AIMessage): {isinstance(processed_message, AIMessage)}")
                     if isinstance(processed_message, AIMessage):
                         final_ai_message = processed_message
@@ -196,7 +195,7 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
 
             if final_ai_message:
                 parsed_output = await self.core_agent.parse_agent_final_output(final_ai_message)
-                logger.info(f"used_tools: {self.get_used_tools()}")
+                logger.info(f"final_ai_message: {final_ai_message}")
                 response_message = Message(
                     messageId=uuid.uuid4().hex,
                     role="agent",
