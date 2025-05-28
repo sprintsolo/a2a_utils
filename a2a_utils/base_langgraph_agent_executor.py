@@ -1,11 +1,10 @@
 import logging
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, AsyncIterable
+from abc import ABC
+from typing import Any, Dict, List, Optional
 import datetime
 import uuid
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-# We'll need types from a2a.server.agent_execution and a2a.server.events
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import TaskStatusUpdateEvent, TaskArtifactUpdateEvent, TaskState, Message, TextPart, DataPart, Artifact, TaskStatus

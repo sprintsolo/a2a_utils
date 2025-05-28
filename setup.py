@@ -10,10 +10,7 @@ setup(
         'langchain-openai',
         'langchain-google-genai',
         'langgraph',
-        'composio-langchain',
-        'composio-core',
-        'pydantic',
-        'langchain'
+        'composio-langchain'
     ],
     description='A common library for A2A projects',
     author='sprintsolo', 

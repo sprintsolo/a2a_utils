@@ -9,16 +9,6 @@ from a2a.server.events import EventQueue
 
 logger = logging.getLogger(__name__)
 
-
-# This was in the old BaseComposioAgent, might be useful if a Pydantic model is returned by parse_agent_output
-# from pydantic import BaseModel, Field, Literal 
-# class BaseResponseFormat(BaseModel):
-#     status: Literal["completed", "error", "working", "input_required"] = "error"
-#     message: str
-#     result: Optional[Any] = None
-#     tool_used: Optional[str] = None
-#     tool_input: Optional[Dict | str] = None
-
 class BaseComposioAgentExecutor(BaseLangGraphAgentExecutor):
     """
     A2A AgentExecutor that wraps a BaseComposioCoreAgent.
