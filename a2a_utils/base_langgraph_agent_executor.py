@@ -162,14 +162,35 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 # Handle event for client-facing updates (status, artifacts)
                 await self._handle_graph_event_for_client(event, context, event_queue)
 
-                if event.get("event") == "on_chat_model_end":
-                    output_chunk = event.get("data", {}).get("chunk")
-                    if hasattr(output_chunk, "content") and output_chunk.content:
-                        final_ai_message = output_chunk 
-                        logger.info(f"Captured final AIMessage (from chunk) for task {task_id}")
-                    elif output_chunk:
-                        final_ai_message = output_chunk
-                        logger.info(f"Captured final AIMessage (from output) for task {task_id}")
+                # Check for pre-processed final AIMessage from the core agent
+                if isinstance(event.get("data"), dict):
+                    processed_message = event.get("data", {}).get("final_agent_message")
+                    if isinstance(processed_message, AIMessage):
+                        final_ai_message = processed_message
+                        logger.info(f"Captured pre-processed final AIMessage from event data for task {task_id}")
+
+                # Fallback or alternative: existing logic for on_chat_model_end / on_chain_end
+                if not final_ai_message:
+                    if event.get("event") == "on_chat_model_end":
+                        output_chunk = event.get("data", {}).get("chunk")
+                        if isinstance(output_chunk, AIMessage):
+                            final_ai_message = output_chunk
+                            logger.info(f"Captured final AIMessage from on_chat_model_end chunk for task {task_id}")
+                        elif hasattr(output_chunk, "content") and output_chunk.content:
+                            final_ai_message = AIMessage(content=str(output_chunk.content))
+                            logger.info(f"Captured content and wrapped as AIMessage from on_chat_model_end chunk for task {task_id}")
+
+                    elif event.get("event") == "on_chain_end":
+                        output_from_chain = event.get("data", {}).get("output")
+                        if isinstance(output_from_chain, AIMessage):
+                            final_ai_message = output_from_chain
+                            logger.info(f"Captured final AIMessage from on_chain_end output for task {task_id}")
+                        elif isinstance(output_from_chain, dict) and output_from_chain.get("content"):
+                             final_ai_message = AIMessage(content=str(output_from_chain.get("content")))
+                             logger.info(f"Captured content from dict and wrapped as AIMessage from on_chain_end output for task {task_id}")
+                        elif isinstance(output_from_chain, str):
+                            final_ai_message = AIMessage(content=output_from_chain)
+                            logger.info(f"Captured string and wrapped as AIMessage from on_chain_end output for task {task_id}")
 
             if final_ai_message:
                 parsed_output = await self.core_agent.parse_agent_final_output(final_ai_message)
