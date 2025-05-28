@@ -165,7 +165,6 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 # Check for pre-processed final AIMessage from the core agent
                 if isinstance(event.get("data"), dict):
                     processed_message = event.get("data", {}).get("final_agent_message")
-                    logger.info(f"isinstance(processed_message, AIMessage): {isinstance(processed_message, AIMessage)}")
                     if isinstance(processed_message, AIMessage):
                         final_ai_message = processed_message
                         logger.info(f"Captured pre-processed final AIMessage from event data for task {task_id}")
@@ -195,7 +194,6 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
 
             if final_ai_message:
                 parsed_output = await self.core_agent.parse_agent_final_output(final_ai_message)
-                logger.info(f"final_ai_message: {final_ai_message}")
                 response_message = Message(
                     messageId=uuid.uuid4().hex,
                     role="agent",
@@ -207,7 +205,7 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 final_status = parsed_output.get("status", TaskState.completed)
                 logger.info(f"final_status: {final_status}")
                 # Send final message
-                event_queue.enqueue_event(response_message)
+                # event_queue.enqueue_event(response_message)
                 
                 # Send final task status
                 final_task_status_update = TaskStatusUpdateEvent(
