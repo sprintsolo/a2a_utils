@@ -165,6 +165,8 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 # Check for pre-processed final AIMessage from the core agent
                 if isinstance(event.get("data"), dict):
                     processed_message = event.get("data", {}).get("final_agent_message")
+                    logger.info(f"processed_message: {processed_message}")
+                    logger.info(f"isinstance(processed_message, AIMessage): {isinstance(processed_message, AIMessage)}")
                     if isinstance(processed_message, AIMessage):
                         final_ai_message = processed_message
                         logger.info(f"Captured pre-processed final AIMessage from event data for task {task_id}")
