@@ -1,10 +1,15 @@
 import logging
-from typing import Any, Dict, List, Optional
+import os
+import asyncio # asyncio 임포트
+import functools # functools 임포트
+from typing import Any, Dict, List, Optional, Callable # Callable 임포트
 
-from composio_langchain import ComposioToolSet
+from composio_langchain import ComposioToolSet # App은 여기서 직접 사용 안 함
+from langchain_core.tools import BaseTool # BaseTool 임포트
 from langchain_core.messages import AIMessage
 
 from .base_langgraph_core_agent import BaseLangGraphCoreAgent
+from .composio_util import TemporaryComposioCwd # 컨텍스트 매니저 임포트
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +27,7 @@ class BaseComposioCoreAgent(BaseLangGraphCoreAgent):
         google_api_key: Optional[str] = None,
         composio_api_key: Optional[str] = None,
         model_name: Optional[str] = None,
-        apps: Optional[List[str]] = None,
+        apps: Optional[List[str]] = None, # 특정 앱 ID 리스트 (예: ["gmail", "github"])
         llm_provider: str = BaseLangGraphCoreAgent.DEFAULT_LLM_PROVIDER,
         *args,
         **kwargs
@@ -35,7 +40,7 @@ class BaseComposioCoreAgent(BaseLangGraphCoreAgent):
             google_api_key: API key for Google. Passed to superclass.
             composio_api_key: Composio API key. If None, it attempts to use an environment variable.
             model_name: Name of the language model to use. Passed to superclass.
-            apps: Optional list of Composio app IDs to enable.
+            apps: Optional list of Composio app IDs (strings) to enable.
                   If None or empty, default Composio behavior (all connected apps) is used.
             llm_provider: The LLM provider to use ("openai" or "google"). Passed to superclass.
         """
@@ -49,52 +54,122 @@ class BaseComposioCoreAgent(BaseLangGraphCoreAgent):
         )
 
         self.composio_toolset: Optional[ComposioToolSet] = None
-        self.apps_to_enable = apps if apps else [] # Store for potential re-initialization or logging
-        self.composio_api_key = composio_api_key # Store for potential re-initialization
+        self.apps_to_enable = apps if apps else [] 
+        self.composio_api_key = composio_api_key
+        self.available_tool_names_and_descriptions: List[Dict[str, str]] = []
 
-        # Initialize tools and graph immediately if apps are provided or default initialization is fine.
-        # The actual fetching of tools and graph creation is deferred to _initialize_graph_if_needed,
-        # but we can set up the toolset here.
+        # ComposioToolSet 초기화는 CWD 변경 없이 여기서 수행
         if ComposioToolSet:
             self.composio_toolset = ComposioToolSet(api_key=self.composio_api_key)
-            # Note: self.tools and self.graph are initialized in _initialize_graph_if_needed
         else:
             logger.error("ComposioToolSet is not available. Cannot initialize Composio tools.")
-            # self.tools will remain empty, and graph creation might fail or use no tools.
 
     def _get_system_instruction(self) -> str:
         """Returns the base system instruction for the Composio agent."""
-        # This can be overridden by subclasses if a more specific instruction is needed.
         return self.DEFAULT_SYSTEM_INSTRUCTION
+
+    def _get_tool_processors(self) -> Optional[Dict[str, Any]]:
+        """
+        Returns processor configurations for Composio tools.
+        Subclasses can override this to provide specific processors.
+        Example: return {"post": {Action.GMAIL_FETCH_EMAILS: my_post_processor}}
+        (Note: Action needs to be imported where this is implemented)
+        """
+        return None
+
+    async def _execute_tool_fetch_in_context(
+        self, 
+        sync_tool_fetch_func: Callable[[], List[BaseTool]], 
+        description: str
+    ) -> List[BaseTool]:
+        """
+        Executes a synchronous tool fetching function within the TemporaryComposioCwd context
+        using run_in_executor.
+        """
+        logger.info(f"Preparing to fetch tools: {description}")
+        
+        def wrapped_sync_fetch():
+            # TemporaryComposioCwd는 기본값 (/tmp, .composio.lock)을 사용
+            with TemporaryComposioCwd():
+                logger.info(f"Executing sync_tool_fetch_func for: {description} within CWD context.")
+                return sync_tool_fetch_func()
+
+        loop = asyncio.get_running_loop()
+        try:
+            fetched_tools = await loop.run_in_executor(None, wrapped_sync_fetch)
+            return fetched_tools if fetched_tools else []
+        except Exception as e:
+            logger.error(f"Error during _execute_tool_fetch_in_context for '{description}': {e}", exc_info=True)
+            return []
+
+    async def _fetch_and_prepare_tools(self, external_user_id: Optional[str] = None) -> List[BaseTool]:
+        """
+        Fetches and prepares tools using ComposioToolSet.
+        This method is intended to be called by subclasses (e.g., in their _initialize_graph_if_needed).
+        """
+        tools: List[BaseTool] = []
+        if not self.composio_toolset:
+            logger.warning("ComposioToolSet not initialized. Cannot fetch tools.")
+            return tools
+
+        if not external_user_id and self.apps_to_enable:
+            logger.warning(
+                "external_user_id not provided for _fetch_and_prepare_tools. "
+                "If any Composio apps require entity-specific connections, tool fetching might fail or use default entities."
+            )
+
+        tool_processors = self._get_tool_processors()
+        
+        sync_get_tools_call = functools.partial(
+            self.composio_toolset.get_tools,
+            apps=self.apps_to_enable, 
+            entity_id=external_user_id, 
+            processors=tool_processors
+        )
+        
+        fetch_description = f"Composio tools for apps: {self.apps_to_enable or 'all connected'}"
+        if external_user_id:
+            fetch_description += f", entity_id: {external_user_id}"
+        if tool_processors and tool_processors.get("post"):
+             fetch_description += f", with post-processors for: {list(tool_processors.get('post', {}).keys())}"
+
+        tools = await self._execute_tool_fetch_in_context(sync_get_tools_call, fetch_description)
+        
+        if tools:
+            # available_tool_names_and_descriptions는 이제 호출하는 쪽(예: GmailCoreAgent)에서 직접 설정하거나,
+            # 또는 이 정보가 필요한 특정 지점에서 self.tools를 기반으로 생성할 수 있습니다.
+            # 여기서는 일단 로깅만 수행합니다.
+            logger.info(f"Successfully fetched {len(tools)} Composio tools. Names: {[tool.name for tool in tools]}")
+            # self.available_tool_names_and_descriptions 업데이트 로직은 제거하여 유연성 확보
+        else:
+            logger.warning("No Composio tools were fetched or an error occurred in _fetch_and_prepare_tools.")
+        
+        return tools
 
     async def _initialize_graph_if_needed(self, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
-        Initializes the LangGraph graph with Composio tools.
-        Overrides the parent method to include Composio tool fetching.
+        Base implementation for graph initialization. 
+        Ensures the model is ready and calls the superclass's (BaseLangGraphCoreAgent) 
+        _initialize_graph_if_needed. Subclasses are expected to override this to populate 
+        self.tools (e.g., by calling self._fetch_and_prepare_tools) and then call this super method, 
+        or build their graph entirely.
         """
-        if self.graph is None: # Only initialize if not already done
-            if not self.model:
-                raise ValueError("Language model (self.model) must be initialized.")
-
-            if self.composio_toolset:
-                logger.info(f"Fetching Composio tools for apps: {self.apps_to_enable if self.apps_to_enable else 'all connected'}")
-                try:
-                    # Fetch tools. If self.apps_to_enable is empty, it gets all connected tools.
-                    self.tools = self.composio_toolset.get_tools(apps=self.apps_to_enable)
-                    if not self.tools:
-                        logger.warning("No Composio tools were fetched. The agent might not function as expected.")
-                    else:
-                        logger.info(f"Successfully fetched {len(self.tools)} Composio tools.")
-                except Exception as e:
-                    logger.error(f"Failed to fetch Composio tools: {e}", exc_info=True)
-                    self.tools = [] # Ensure tools list is empty on failure
-            else:
-                logger.warning("ComposioToolSet not initialized. No Composio tools will be available.")
-                self.tools = []
-            
-            # Call the superclass's graph initialization logic (which uses self.tools)
-            await super()._initialize_graph_if_needed(metadata)
-            logger.info(f"BaseComposioCoreAgent graph initialized with {len(self.tools)} tools.")
+        if self.graph is not None:
+            return # Graph already initialized
+        
+        if not self.model:
+            raise ValueError("Language model (self.model) must be initialized before graph creation.")
+        
+        # This base method no longer populates self.tools directly.
+        # Subclasses (like GmailCoreAgent) should populate self.tools before calling
+        # super()._initialize_graph_if_needed(metadata) if they want the base LangGraphCoreAgent
+        # to build a graph with those tools. Or, they can build the graph entirely themselves.
+        
+        await super()._initialize_graph_if_needed(metadata) 
+        logger.info(
+            f"BaseComposioCoreAgent._initialize_graph_if_needed finished. "
+            f"Graph setup depends on subclass implementation and BaseLangGraphCoreAgent."
+        )
 
     async def parse_agent_final_output(self, agent_output: AIMessage) -> Dict[str, Any]:
         """
