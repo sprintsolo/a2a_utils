@@ -215,23 +215,27 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
         Handles LLM client and graph lifecycle, delegates input preparation and graph execution to abstract methods.
         """
         logger.info(f"CoreAgent run_graph_stream (template) for session {session_id} - Query: {query[:50]}...")
+        graph_initialized_successfully = False
         async with self._managed_llm_session():
             # 1. Initialize graph (tools, compilation) - self.model is now set by _managed_llm_session
             # metadata is passed to _initialize_graph_if_needed for potential use (e.g., external_user_id for Composio).
             await self._initialize_graph_if_needed(metadata=metadata) # Ensures self.tools and self.graph are set up.
             if self.graph is None:
-                logger.error(f"Graph could not be initialized for session {session_id} by _initialize_graph_if_needed. Aborting stream.")
-                # Return an empty async iterable if graph initialization fails
-                async def empty_stream():
-                    if False: yield # Creates an async generator
-                return empty_stream()
-            # 2. Prepare graph input using subclass logic
-            graph_input_data = await self._prepare_graph_input(query, session_id, metadata)
-            # 3. Configure LangGraph execution
-            config = {"configurable": {"thread_id": str(session_id)}}
-            # 4. Execute graph and stream events using subclass logic
-            logger.info(f"CoreAgent proceeding to _execute_prepared_graph for session {session_id}")
-            async for event in self._execute_prepared_graph(graph_input_data, config, metadata):
-                yield event
+                logger.error(f"Graph could not be initialized for session {session_id} by _initialize_graph_if_needed. Stream will be empty.")
+                # graph_initialized_successfully remains False, loop below won't run
+            else:
+                graph_initialized_successfully = True
+
+            # Only proceed if graph was initialized
+            if graph_initialized_successfully:
+                # 2. Prepare graph input using subclass logic
+                graph_input_data = await self._prepare_graph_input(query, session_id, metadata)
+                # 3. Configure LangGraph execution
+                config = {"configurable": {"thread_id": str(session_id)}}
+                # 4. Execute graph and stream events using subclass logic
+                logger.info(f"CoreAgent proceeding to _execute_prepared_graph for session {session_id}")
+                async for event in self._execute_prepared_graph(graph_input_data, config, metadata):
+                    yield event
+            # If graph_initialized_successfully is False, this block is skipped, yielding an empty stream.
         
-        logger.info(f"CoreAgent run_graph_stream (template) finished for session {session_id}.") 
+        logger.info(f"CoreAgent run_graph_stream (template) finished for session {session_id}. Graph init success: {graph_initialized_successfully}") 
