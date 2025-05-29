@@ -155,21 +155,47 @@ class BaseComposioCoreAgent(BaseLangGraphCoreAgent):
         or build their graph entirely.
         """
         if self.graph is not None:
-            return # Graph already initialized
+            logger.debug(f"{self.__class__.__name__}: Graph already initialized. Skipping.")
+            return
         
         if not self.model:
-            raise ValueError("Language model (self.model) must be initialized before graph creation.")
+            raise ValueError(f"{self.__class__.__name__}: Language model (self.model) must be set before graph initialization.")
         
-        # This base method no longer populates self.tools directly.
-        # Subclasses (like GmailCoreAgent) should populate self.tools before calling
-        # super()._initialize_graph_if_needed(metadata) if they want the base LangGraphCoreAgent
-        # to build a graph with those tools. Or, they can build the graph entirely themselves.
+        external_user_id = metadata.get("external_user_id") if metadata else None
         
+        logger.info(f"{self.__class__.__name__}: Fetching Composio tools...")
+        fetched_tools = await self._fetch_and_prepare_tools(external_user_id=external_user_id)
+        self.tools = fetched_tools # self.tools를 여기서 설정
+
+        if self.tools:
+            self.available_tool_names_and_descriptions = [
+                {"name": tool.name, "description": tool.description} for tool in self.tools
+            ]
+            logger.info(f"{self.__class__.__name__}: Updated available_tool_names_and_descriptions with {len(self.tools)} tools.")
+        else:
+            self.available_tool_names_and_descriptions = [] # 비어있는 경우도 명시적 초기화
+            logger.warning(f"{self.__class__.__name__}: No Composio tools fetched. available_tool_names_and_descriptions is empty.")
+
+        # BaseLangGraphCoreAgent의 기본 그래프 빌드 로직을 호출하여, 여기서 가져온 self.tools를 사용하도록 함.
+        # 만약 하위 클래스(예: GmailCoreAgent)가 이 기본 그래프 빌드 대신 자체 그래프를 만들고 싶다면,
+        # 이 _initialize_graph_if_needed 메서드를 재정의하고, self.tools 설정 후 super() 호출 없이 직접 그래프를 빌드해야 함.
+        logger.info(f"{self.__class__.__name__}: Calling super()._initialize_graph_if_needed to build graph with fetched Composio tools.")
         await super()._initialize_graph_if_needed(metadata) 
-        logger.info(
-            f"BaseComposioCoreAgent._initialize_graph_if_needed finished. "
-            f"Graph setup depends on subclass implementation and BaseLangGraphCoreAgent."
-        )
+        
+        # super() 호출 후, self.graph가 설정되었는지 확인 (BaseLangGraphCoreAgent의 기본 빌더가 성공했다면)
+        if self.graph:
+            logger.info(
+                f"{self.__class__.__name__}._initialize_graph_if_needed finished. "
+                f"Graph built by BaseLangGraphCoreAgent using Composio tools: {[tool.name for tool in self.tools] if self.tools else 'None'}"
+            )
+        else:
+            # 이 경우는 BaseLangGraphCoreAgent의 기본 빌더가 어떤 이유로 그래프를 생성하지 못했거나,
+            # 혹은 BaseLangGraphCoreAgent의 _initialize_graph_if_needed가 재정의되어 그래프를 빌드하지 않은 경우
+            logger.warning(
+                f"{self.__class__.__name__}._initialize_graph_if_needed finished, but self.graph is still None. "
+                f"This might be expected if a subclass (like GmailCoreAgent) overrides _initialize_graph_if_needed "
+                f"to build its own graph without calling super() or if the base graph builder failed."
+            )
 
     async def parse_agent_final_output(self, agent_output: AIMessage) -> Dict[str, Any]:
         """

@@ -1,6 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, AsyncIterable
+import contextlib
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 # LangGraph specific imports, assuming create_react_agent and MemorySaver are standard
@@ -47,37 +48,27 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
         self.llm_provider = llm_provider.lower()
         self.openai_api_key = openai_api_key
         self.google_api_key = google_api_key
-        self.model: Optional[Any] = None # Will be set below
+        self.model: Optional[Any] = None # 요청별로 생성될 수 있으므로 초기에는 None 또는 기본값
+        self.configured_model_name: Optional[str] = model_name # 제공된 모델 이름 저장
         
-        _model_name = model_name
+        # __init__에서 모델을 즉시 생성하지 않도록 변경 (run_graph_stream에서 생성)
+        # 다만, llm_provider에 따른 기본 모델명은 여기서 결정해둘 수 있음
+        if not self.configured_model_name:
+            if self.llm_provider == "openai":
+                self.configured_model_name = self.DEFAULT_OPENAI_MODEL
+            elif self.llm_provider == "google":
+                self.configured_model_name = self.DEFAULT_GOOGLE_MODEL
 
-        if self.llm_provider == "openai":
-            if not self.openai_api_key:
-                raise ValueError("openai_api_key must be provided if llm_provider is 'openai'.")
-            if _model_name is None:
-                _model_name = self.DEFAULT_OPENAI_MODEL
-            self.model = ChatOpenAI(model_name=_model_name, openai_api_key=self.openai_api_key, streaming=True)
-            logger.info(f"Initialized BaseLangGraphCoreAgent with OpenAI model: {_model_name}")
-        elif self.llm_provider == "google":
-            if not self.google_api_key:
-                raise ValueError("google_api_key must be provided if llm_provider is 'google'.")
-            if _model_name is None:
-                _model_name = self.DEFAULT_GOOGLE_MODEL
-            self.model = ChatGoogleGenerativeAI(
-                model=_model_name,
-                google_api_key=self.google_api_key,
-                # streaming=True, # streaming 대신 disable_streaming 사용 권장
-                disable_streaming=False, 
-                convert_system_message_to_human=False,
-                temperature=0.1, # 기본 온도 설정
-            )
-            logger.info(f"Initialized BaseLangGraphCoreAgent with Google model: {_model_name}")
-        else:
-            raise ValueError(f"Unsupported llm_provider: {self.llm_provider}. Choose 'openai' or 'google'.")
+        # API 키 유효성 검사는 여기서 수행 가능
+        if self.llm_provider == "openai" and not self.openai_api_key:
+            raise ValueError("openai_api_key must be provided if llm_provider is 'openai'.")
+        if self.llm_provider == "google" and not self.google_api_key:
+            raise ValueError("google_api_key must be provided if llm_provider is 'google'.")
 
+        logger.info(f"BaseLangGraphCoreAgent configured for llm_provider: {self.llm_provider}, model_name: {self.configured_model_name}")
         self.tools: List[Any] = []
         self.graph: Optional[Any] = None
-        self.memory = MemorySaver() # Default memory, can be configured
+        self.memory = MemorySaver()
 
     @abstractmethod
     def _get_system_instruction(self) -> str:
@@ -108,20 +99,28 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
     async def _initialize_graph_if_needed(self, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Initializes the LangGraph (self.graph) if it's not already set.
-        This method is a placeholder and should be implemented or overridden by subclasses 
-        (like BaseComposioCoreAgent) if graph/tools need dynamic initialization based on metadata.
-        By default, it assumes self.model and self.tools are already configured.
+        This method is called by the run_graph_stream template method after the LLM model is set up.
+        Subclasses like BaseComposioCoreAgent will override this to fetch tools and build the graph.
+        By default, it assumes self.model is set and self.tools might be populated by a subclass
+        or this method itself if overridden (e.g., by BaseComposioCoreAgent).
         """
-        if self.graph is None:
-            if not self.model:
-                raise ValueError("Language model (self.model) must be initialized before the graph.")
-            # Default graph creation without dynamic tools from metadata
-            self.graph = create_react_agent(
-                self.model,
-                tools=self.tools, # Assumes self.tools is populated by subclass
-                checkpointer=self.memory
-            )
-            logger.info(f"Default LangGraph graph initialized for {self.__class__.__name__}")
+        if self.graph is not None:
+            logger.debug(f"Graph already initialized for {self.__class__.__name__}. Skipping re-initialization within this session.")
+            return
+
+        if not self.model:
+            raise ValueError("Language model (self.model) instance is not available for graph initialization. It should be set by _managed_llm_session before calling _initialize_graph_if_needed.")
+        
+        # Default implementation creates a simple ReAct agent.
+        # Subclasses (like BaseComposioCoreAgent) are expected to override this method
+        # to set self.tools (e.g., by fetching from Composio) and then build their specific graph.
+        # If self.tools is not populated by a subclass overriding this method, a warning will be issued.
+        if not self.tools and not isinstance(__import__("a2a_utils.base_composio_core_agent").base_composio_core_agent.BaseComposioCoreAgent): # Avoid circular import for type check
+            logger.warning(f"No tools found in self.tools for {self.__class__.__name__}. \n                              If this agent uses tools, ensure self.tools is populated in an overridden \n                              _initialize_graph_if_needed or before graph compilation. Initializing graph without tools.")
+
+        self.graph = create_react_agent(self.model, tools=self.tools, checkpointer=self.memory)
+        tool_names = [tool.name for tool in self.tools] if self.tools else "None"
+        logger.info(f"Default LangGraph graph compiled for {self.__class__.__name__} with tools: {tool_names}")
 
     async def _process_langgraph_event_for_tracking(self, event: Dict[str, Any]) -> None:
         """
@@ -136,44 +135,103 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
             await self.track_tool_usage(tool_name, tool_input, tool_output)
             logger.debug(f"CoreAgent tracked tool usage for {tool_name} via LangGraph event.")
 
+    @contextlib.asynccontextmanager
+    async def _managed_llm_session(self) -> AsyncIterable[None]:
+        original_model = self.model
+        original_graph = self.graph
+        request_specific_model: Optional[Any] = None
+
+        try:
+            if self.llm_provider == "google":
+                if not self.google_api_key: raise ValueError("Google API key not configured.")
+                logger.info(f"Creating new ChatGoogleGenerativeAI instance for session (model: {self.configured_model_name})")
+                request_specific_model = ChatGoogleGenerativeAI(
+                    model=self.configured_model_name,
+                    google_api_key=self.google_api_key,
+                    disable_streaming=True,
+                    convert_system_message_to_human=False,
+                    temperature=0.1,
+                )
+            elif self.llm_provider == "openai":
+                if not self.openai_api_key: raise ValueError("OpenAI API key not configured.")
+                logger.info(f"Creating new ChatOpenAI instance for session (model: {self.configured_model_name})")
+                request_specific_model = ChatOpenAI(
+                    model_name=self.configured_model_name,
+                    openai_api_key=self.openai_api_key,
+                    streaming=True
+                )
+            else:
+                raise ValueError(f"Unsupported llm_provider: {self.llm_provider}")
+            
+            self.model = request_specific_model
+            self.graph = None # Force graph re-initialization with the new model
+            yield
+        finally:
+            if request_specific_model:
+                logger.info(f"Cleaning up request-specific model instance for {self.llm_provider}.")
+                if hasattr(request_specific_model, "aclose") and callable(request_specific_model.aclose):
+                    try:
+                        await request_specific_model.aclose()
+                        logger.info("Called aclose() on request-specific model.")
+                    except Exception as close_exc:
+                        logger.error(f"Error calling aclose() on request-specific model: {close_exc}", exc_info=True)
+                elif self.llm_provider == "google" and hasattr(request_specific_model, "_async_client") and \
+                       request_specific_model._async_client is not None and \
+                       hasattr(request_specific_model._async_client, "close") and \
+                       callable(request_specific_model._async_client.close):
+                    try:
+                        await request_specific_model._async_client.close()
+                        logger.info("Closed _async_client of request-specific Google model.")
+                    except Exception as close_exc:
+                        logger.error(f"Error closing _async_client of Google model: {close_exc}", exc_info=True)
+            self.model = original_model
+            self.graph = original_graph
+
+    @abstractmethod
+    async def _prepare_graph_input(self, query: str, session_id: str, metadata: Optional[Dict[str, Any]]) -> Any:
+        """
+        Prepares the initial input/state for the LangGraph.
+        Called by run_graph_stream within _managed_llm_session, after _initialize_graph_if_needed.
+        Subclasses must implement this to return the graph's expected input format (e.g., ReActState, dict).
+        """
+        pass
+
+    @abstractmethod
+    async def _execute_prepared_graph(self, graph_input: Any, config: Dict[str, Any], metadata: Optional[Dict[str, Any]]) -> AsyncIterable[Dict[str, Any]]:
+        """
+        Executes the LangGraph with the prepared input and yields events.
+        Called by run_graph_stream. Subclasses implement this to call self.graph.astream or astream_events.
+        """
+        pass
+
     async def run_graph_stream(
         self,
         query: str,
-        session_id: str, # thread_id for LangGraph
-        metadata: Optional[Dict[str, Any]] = None # For potential dynamic graph/tool initialization
-    ) -> AsyncIterable[Dict[str, Any]]: # Yields raw LangGraph events
+        session_id: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterable[Dict[str, Any]]:
         """
-        Runs the LangGraph agent and yields raw events from the graph execution stream.
-        
-        Args:
-            query: The user query.
-            session_id: The session ID, used as thread_id for LangGraph.
-            metadata: Optional metadata, which might be used by _initialize_graph_if_needed.
-            
-        Yields:
-            Raw event dictionaries from LangGraph's astream_events.
+        Template method for running the LangGraph agent.
+        Handles LLM client and graph lifecycle, delegates input preparation and graph execution to abstract methods.
         """
-        try:
-            # Ensure graph is initialized (subclasses like Composio might do more here)
-            # await self._initialize_graph_if_needed(metadata)
-
+        logger.info(f"CoreAgent run_graph_stream (template) for session {session_id} - Query: {query[:50]}...")
+        async with self._managed_llm_session():
+            # 1. Initialize graph (tools, compilation) - self.model is now set by _managed_llm_session
+            # metadata is passed to _initialize_graph_if_needed for potential use (e.g., external_user_id for Composio).
+            await self._initialize_graph_if_needed(metadata=metadata) # Ensures self.tools and self.graph are set up.
             if self.graph is None:
-                # This should ideally be caught by _initialize_graph_if_needed or an earlier setup phase
-                raise ValueError("LangGraph (self.graph) is not initialized.")
-
-            # self.clear_used_tools() # Clear any previous tool usage for this run
-            
-            input_data = await self._format_input_for_graph(query)
+                logger.error(f"Graph could not be initialized for session {session_id} by _initialize_graph_if_needed. Aborting stream.")
+                # Return an empty async iterable if graph initialization fails
+                async def empty_stream():
+                    if False: yield # Creates an async generator
+                return empty_stream()
+            # 2. Prepare graph input using subclass logic
+            graph_input_data = await self._prepare_graph_input(query, session_id, metadata)
+            # 3. Configure LangGraph execution
             config = {"configurable": {"thread_id": str(session_id)}}
-
-            logger.info(f"CoreAgent starting LangGraph stream for session {session_id} with query: {query[:100]}...")
-            
-            async for event in self.graph.astream_events(input_data, config, version="v1"):
-                # Process the event for internal tool tracking before yielding
-                # await self._process_langgraph_event_for_tracking(event)
-                yield event # Yield the raw LangGraph event
-            
-            logger.info(f"CoreAgent finished LangGraph stream for session {session_id}.")
-        except Exception as e:
-            logger.error(f"Error in run_graph_stream: {e}", exc_info=True)
-            raise 
+            # 4. Execute graph and stream events using subclass logic
+            logger.info(f"CoreAgent proceeding to _execute_prepared_graph for session {session_id}")
+            async for event in self._execute_prepared_graph(graph_input_data, config, metadata):
+                yield event
+        
+        logger.info(f"CoreAgent run_graph_stream (template) finished for session {session_id}.") 
