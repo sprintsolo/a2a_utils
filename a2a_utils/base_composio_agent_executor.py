@@ -33,36 +33,36 @@ class BaseComposioAgentExecutor(BaseLangGraphAgentExecutor):
         super().__init__(core_agent) # Pass the BaseComposioCoreAgent to the parent constructor
         logger.info(f"BaseComposioAgentExecutor initialized with core agent: {core_agent.__class__.__name__}")
 
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        """
-        Executes the LangGraph agent based on the request context and publishes events to the event queue.
-        This method handles the execution flow and event processing only.
-        The actual LLM interaction is delegated to the CoreAgent.
-        """
-        logger.info("Executing BaseComposioAgentExecutor with context:")
-        logger.info(f"Context Details:\n{pformat(vars(context), indent=2, width=120)}")
-        logger.info(f"Executing BaseComposioAgentExecutor for task {context}")
-        try:
-            # Initialize graph through core_agent
-            await self.core_agent._initialize_graph_if_needed(
-                metadata=getattr(context._params, 'metadata', {})
-            )
-        except Exception as e:
-            logger.error(f"Error during graph initialization for task {context.task_id}: {e}", exc_info=True)
-            error_message = Message(
-                messageId=uuid.uuid4().hex,
-                role="agent", 
-                parts=[TextPart(text=f"Graph initialization failed: {str(e)}")]
-            )
-            event_queue.enqueue_event(error_message)
-            event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    taskId=getattr(context, 'task_id', str(uuid.uuid4())),
-                    contextId=getattr(context, 'context_id', str(uuid.uuid4())),
-                    status=TaskStatus(state=TaskState.failed, message=error_message),
-                    final=True
-                )
-            )
-            return
+    # async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+    #     """
+    #     Executes the LangGraph agent based on the request context and publishes events to the event queue.
+    #     This method handles the execution flow and event processing only.
+    #     The actual LLM interaction is delegated to the CoreAgent.
+    #     """
+    #     logger.info("Executing BaseComposioAgentExecutor with context:")
+    #     logger.info(f"Context Details:\n{pformat(vars(context), indent=2, width=120)}")
+    #     logger.info(f"Executing BaseComposioAgentExecutor for task {context}")
+    #     try:
+    #         # Initialize graph through core_agent
+    #         await self.core_agent._initialize_graph_if_needed(
+    #             metadata=getattr(context._params, 'metadata', {})
+    #         )
+    #     except Exception as e:
+    #         logger.error(f"Error during graph initialization for task {context.task_id}: {e}", exc_info=True)
+    #         error_message = Message(
+    #             messageId=uuid.uuid4().hex,
+    #             role="agent", 
+    #             parts=[TextPart(text=f"Graph initialization failed: {str(e)}")]
+    #         )
+    #         event_queue.enqueue_event(error_message)
+    #         event_queue.enqueue_event(
+    #             TaskStatusUpdateEvent(
+    #                 taskId=getattr(context, 'task_id', str(uuid.uuid4())),
+    #                 contextId=getattr(context, 'context_id', str(uuid.uuid4())),
+    #                 status=TaskStatus(state=TaskState.failed, message=error_message),
+    #                 final=True
+    #             )
+    #         )
+    #         return
 
-        await super().execute(context, event_queue) 
+    #     await super().execute(context, event_queue) 

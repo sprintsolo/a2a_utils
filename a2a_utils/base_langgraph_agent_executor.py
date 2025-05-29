@@ -114,7 +114,7 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
         Executes the LangGraph agent based on the request context and publishes events to the event queue.
         This method handles the execution flow and event processing only.
         The actual LLM interaction is delegated to the CoreAgent.
-        """
+        """        
         if self.core_agent is None:
             logger.error(f"Agent graph is not initialized for task {context.task_id}. This must be done by a subclass or a setup method before execute.")
             # Send a failed status update
@@ -130,6 +130,30 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 final=True
             )
             event_queue.enqueue_event(error_status)
+            return
+        
+        try:
+            # Initialize graph through core_agent
+            if self.core_agent.graph is None:
+                await self.core_agent._initialize_graph_if_needed(
+                    metadata=getattr(context._params, 'metadata', {})
+                )
+        except Exception as e:
+            logger.error(f"Error during graph initialization for task {context.task_id}: {e}", exc_info=True)
+            error_message = Message(
+                messageId=uuid.uuid4().hex,
+                role="agent", 
+                parts=[TextPart(text=f"Graph initialization failed: {str(e)}")]
+            )
+            event_queue.enqueue_event(error_message)
+            event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    taskId=getattr(context, 'task_id', str(uuid.uuid4())),
+                    contextId=getattr(context, 'context_id', str(uuid.uuid4())),
+                    status=TaskStatus(state=TaskState.failed, message=error_message),
+                    final=True
+                )
+            )
             return
 
         # Check if task attribute exists and handle accordingly

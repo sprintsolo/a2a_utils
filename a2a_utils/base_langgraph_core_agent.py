@@ -155,13 +155,13 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
         """
         try:
             # Ensure graph is initialized (subclasses like Composio might do more here)
-            await self._initialize_graph_if_needed(metadata)
+            # await self._initialize_graph_if_needed(metadata)
 
             if self.graph is None:
                 # This should ideally be caught by _initialize_graph_if_needed or an earlier setup phase
                 raise ValueError("LangGraph (self.graph) is not initialized.")
 
-            self.clear_used_tools() # Clear any previous tool usage for this run
+            # self.clear_used_tools() # Clear any previous tool usage for this run
             
             input_data = await self._format_input_for_graph(query)
             config = {"configurable": {"thread_id": str(session_id)}}
@@ -170,7 +170,7 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
             
             async for event in self.graph.astream_events(input_data, config, version="v1"):
                 # Process the event for internal tool tracking before yielding
-                await self._process_langgraph_event_for_tracking(event)
+                # await self._process_langgraph_event_for_tracking(event)
                 yield event # Yield the raw LangGraph event
             
             logger.info(f"CoreAgent finished LangGraph stream for session {session_id}.")
