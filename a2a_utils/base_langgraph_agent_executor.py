@@ -116,12 +116,11 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
         The actual LLM interaction is delegated to the CoreAgent.
         """        
         if self.core_agent is None:
-            logger.error(f"Agent graph is not initialized for task {context.task_id}. This must be done by a subclass or a setup method before execute.")
-            # Send a failed status update
+            logger.error(f"Core agent is not initialized for task {context.task_id}.")
             error_message = Message(
                 messageId=uuid.uuid4().hex,
                 role="agent", 
-                parts=[TextPart(text="Agent graph not initialized.")]
+                parts=[TextPart(text="Core agent not initialized.")]
             )
             error_status = TaskStatusUpdateEvent(
                 taskId=getattr(context, 'task_id', str(uuid.uuid4())),
@@ -132,31 +131,6 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
             event_queue.enqueue_event(error_status)
             return
         
-        try:
-            # Initialize graph through core_agent
-            if self.core_agent.graph is None:
-                await self.core_agent._initialize_graph_if_needed(
-                    metadata=getattr(context._params, 'metadata', {})
-                )
-        except Exception as e:
-            logger.error(f"Error during graph initialization for task {context.task_id}: {e}", exc_info=True)
-            error_message = Message(
-                messageId=uuid.uuid4().hex,
-                role="agent", 
-                parts=[TextPart(text=f"Graph initialization failed: {str(e)}")]
-            )
-            event_queue.enqueue_event(error_message)
-            event_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    taskId=getattr(context, 'task_id', str(uuid.uuid4())),
-                    contextId=getattr(context, 'context_id', str(uuid.uuid4())),
-                    status=TaskStatus(state=TaskState.failed, message=error_message),
-                    final=True
-                )
-            )
-            return
-
-        # Check if task attribute exists and handle accordingly
         task_id = getattr(context, 'task_id', str(uuid.uuid4()))
         context_id = getattr(context, 'context_id', str(uuid.uuid4()))
         task_metadata = getattr(context._params, 'metadata', {})
@@ -169,6 +143,7 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
         self.clear_used_tools()
 
         final_ai_message: Optional[AIMessage] = None
+        stream_had_events = False # Track if events were received
         
         try:
             async for event in self.core_agent.run_graph_stream(
@@ -176,6 +151,7 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 session_id=session_id, 
                 metadata=task_metadata
             ):
+                stream_had_events = True # Mark event reception
                 if event.get("event") == "on_tool_end":
                     tool_name_event = event.get("name", "unnamed_tool")
                     tool_input_event = event.get("data", {}).get("input", "")
@@ -243,13 +219,27 @@ class BaseLangGraphAgentExecutor(AgentExecutor, ToolUsageTrackingMixin, ABC):
                 )
                 event_queue.enqueue_event(final_task_status_update)
                 logger.info(f"Sent final response and status for task {task_id}")
-            else:
-                logger.warning(f"Stream completed without a final AIMessage for task {task_id}")
-                # Send a generic completion
+            elif not stream_had_events: # Stream was empty (probably due to graph initialization failure)
+                logger.warning(f"Stream was empty (no events yielded), possibly due to graph initialization failure for task {task_id}.")
+                error_message = Message(
+                    messageId=uuid.uuid4().hex,
+                    role="agent", 
+                    parts=[TextPart(text="Agent stream was empty. Graph initialization might have failed.")]
+                )
+                event_queue.enqueue_event(
+                    TaskStatusUpdateEvent(
+                        taskId=task_id,
+                        contextId=context_id,
+                        status=TaskStatus(state=TaskState.failed, message=error_message),
+                        final=True
+                    )
+                )
+            else: # Stream had events but final_ai_message was not set
+                logger.warning(f"Stream completed without a conclusive final AIMessage for task {task_id}, though events were processed.")
                 generic_message = Message(
                     messageId=uuid.uuid4().hex,
                     role="agent", 
-                    parts=[TextPart(text="Agent stream finished without a conclusive message.")]
+                    parts=[TextPart(text="Agent stream finished without a conclusive message, but processing occurred.")]
                 )
                 event_queue.enqueue_event(
                     TaskStatusUpdateEvent(
