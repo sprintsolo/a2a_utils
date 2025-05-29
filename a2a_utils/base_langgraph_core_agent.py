@@ -229,9 +229,7 @@ class BaseLangGraphCoreAgent(ToolUsageTrackingMixin, ABC):
             # Only proceed if graph was initialized
             if graph_initialized_successfully:
                 # 2. Prepare graph input using subclass logic
-                graph_input_data = await self._prepare_graph_input(query, session_id, metadata)
-                # 3. Configure LangGraph execution
-                config = {"configurable": {"thread_id": str(session_id)}}
+                graph_input_data, config = await self._prepare_graph_input(query, session_id, metadata)
                 # 4. Execute graph and stream events using subclass logic
                 logger.info(f"CoreAgent proceeding to _execute_prepared_graph for session {session_id}")
                 async for event in self._execute_prepared_graph(graph_input_data, config, metadata):
